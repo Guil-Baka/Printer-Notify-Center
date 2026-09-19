@@ -100,6 +100,7 @@ class Printer:
 class Settings:
     use_native_notifications: bool = True
     use_in_app_notifications: bool = True
+    notification_sound_path: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import flet as ft
 
 from .config import AppConfig
-from .models import OPERATORS, TARGET_PRESETS, Printer, Target
+from .models import OPERATORS, TARGET_PRESETS, Printer, Settings, Target
 from .monitor import MonitorManager
-from .notifier import Notifier
+from .notifier import Notifier, show_popup_notification
 
 
 def format_status(info: dict | None) -> tuple[str, str]:
@@ -46,8 +47,7 @@ class PrinterNotifyApp:
         # re-enters route_change() while the lock is already held.
         self.update_lock = threading.RLock()
 
-        self.notifier = Notifier(self.config.settings,
-                                 in_app_callback=self.show_in_app_notification)
+        self.notifier = Notifier(self.config.settings)
         self.monitor_manager = MonitorManager(
             self.notifier, self.on_status_update)
         self.status_cache: dict[str, dict] = {}
@@ -75,6 +75,8 @@ class PrinterNotifyApp:
         self.page.window.height = 720
         self.page.window.min_width = 480
         self.page.window.min_height = 480
+        self.sound_file_picker = ft.FilePicker()
+        self.page.services.append(self.sound_file_picker)
 
     # --------------------------------------------------------------- routing
     def route_change(self, e: ft.RouteChangeEvent) -> None:
@@ -477,18 +479,61 @@ class PrinterNotifyApp:
     def open_settings_dialog(self) -> None:
         native_switch = ft.Switch(
             label="OS native notifications", value=self.config.settings.use_native_notifications)
-        in_app_switch = ft.Switch(label="In-app popup notifications",
+        in_app_switch = ft.Switch(label="Standalone popup notifications",
                                   value=self.config.settings.use_in_app_notifications)
         info_text = ft.Text(
-            "In-app popups are always shown automatically if native notifications are "
-            "disabled or unsupported on your OS.",
+            "Standalone popups appear as their own small window (outside the app), and are "
+            "always shown automatically if native notifications are disabled or unsupported "
+            "on your OS.",
             size=12,
             color=ft.Colors.OUTLINE,
         )
 
+        sound_path = {"value": self.config.settings.notification_sound_path}
+        sound_path_text = ft.Text(
+            Path(sound_path["value"]
+                 ).name if sound_path["value"] else "Default sound",
+            size=12,
+            color=ft.Colors.OUTLINE,
+        )
+
+        def pick_sound_result(e: ft.FilePickerResultEvent) -> None:
+            if e.files:
+                sound_path["value"] = e.files[0].path
+                sound_path_text.value = e.files[0].name
+                self.page.update()
+
+        self.sound_file_picker.on_result = pick_sound_result
+
+        def browse_sound(e: ft.ControlEvent) -> None:
+            self.sound_file_picker.pick_files(
+                dialog_title="Choose a notification sound",
+                allowed_extensions=["mp3", "wav", "ogg"],
+            )
+
+        def reset_sound(e: ft.ControlEvent) -> None:
+            sound_path["value"] = ""
+            sound_path_text.value = "Default sound"
+            self.page.update()
+
+        def test_native_notification(e: ft.ControlEvent) -> None:
+            # Forces the native channel only, regardless of the popup toggle.
+            test_settings = Settings(
+                use_native_notifications=True, use_in_app_notifications=False)
+            Notifier(test_settings).notify(
+                "Test notification", "This is what a native OS notification looks like."
+            )
+
+        def test_in_app_notification(e: ft.ControlEvent) -> None:
+            show_popup_notification(
+                "Test notification", "This is what a standalone popup looks like.",
+                sound_path=sound_path["value"],
+            )
+
         def save(e: ft.ControlEvent) -> None:
             self.config.settings.use_native_notifications = native_switch.value
             self.config.settings.use_in_app_notifications = in_app_switch.value
+            self.config.settings.notification_sound_path = sound_path["value"]
             self.config.save()
             with self.update_lock:
                 self.page.pop_dialog()
@@ -496,8 +541,37 @@ class PrinterNotifyApp:
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Settings"),
-            content=ft.Column([native_switch, in_app_switch,
-                              info_text], tight=True, spacing=10, width=380),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [native_switch, ft.TextButton(
+                            "Test", icon=ft.Icons.NOTIFICATIONS_ACTIVE, on_click=test_native_notification)],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        [in_app_switch, ft.TextButton(
+                            "Test", icon=ft.Icons.NOTIFICATIONS_ACTIVE, on_click=test_in_app_notification)],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [ft.Text("Popup sound", size=13),
+                                 sound_path_text], spacing=0, expand=True,
+                            ),
+                            ft.IconButton(
+                                ft.Icons.FOLDER_OPEN, tooltip="Choose sound file", on_click=browse_sound),
+                            ft.IconButton(
+                                ft.Icons.RESTORE, tooltip="Reset to default", on_click=reset_sound),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    info_text,
+                ],
+                tight=True,
+                spacing=10,
+                width=380,
+            ),
             actions=[ft.FilledButton("Done", on_click=save)],
         )
         with self.update_lock:
@@ -507,21 +581,6 @@ class PrinterNotifyApp:
     def refresh_current_view(self) -> None:
         with self.update_lock:
             self.route_change(None)
-
-    def show_in_app_notification(self, title: str, message: str) -> None:
-        with self.update_lock:
-            self.page.show_dialog(
-                ft.SnackBar(
-                    content=ft.Column(
-                        [ft.Text(title, weight=ft.FontWeight.BOLD),
-                         ft.Text(message)],
-                        tight=True,
-                        spacing=2,
-                    ),
-                    duration=6000,
-                )
-            )
-            self.page.update()
 
     def on_status_update(self, printer_id: str, info: dict) -> None:
         self.status_cache[printer_id] = info
