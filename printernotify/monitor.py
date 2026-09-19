@@ -4,6 +4,8 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
+import requests
+
 from .models import Printer
 from .moonraker_client import MoonrakerClient
 from .notifier import Notifier
@@ -11,6 +13,21 @@ from .notifier import Notifier
 # Objects always polled so the dashboard has something useful to show, in
 # addition to whatever objects the user's targets reference.
 BASE_OBJECTS = ["print_stats", "virtual_sdcard", "extruder", "heater_bed"]
+
+
+def describe_error(exc: Exception) -> str:
+    """Turns a raw requests exception into a short, human-readable reason."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        if "actively refused" in str(exc) or "10061" in str(exc):
+            return "Connection refused (Moonraker not running or wrong port?)"
+        if "getaddrinfo failed" in str(exc) or "Name or service not known" in str(exc):
+            return "Host not found (check the address)"
+        return "Could not connect (check host/network)"
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "Connection timed out"
+    if isinstance(exc, requests.exceptions.HTTPError):
+        return f"HTTP error ({exc.response.status_code if exc.response is not None else '?'})"
+    return str(exc)
 
 
 def _coerce(value_str: str, sample):
@@ -78,7 +95,7 @@ class PrinterMonitor:
                 self._evaluate_targets(status)
             except Exception as exc:
                 self.status_callback(
-                    self.printer.id, {"online": False, "error": str(exc)})
+                    self.printer.id, {"online": False, "error": describe_error(exc)})
             self._stop_event.wait(max(self.printer.polling_interval, 1.0))
 
     def _evaluate_targets(self, status: dict) -> None:

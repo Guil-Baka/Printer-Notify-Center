@@ -58,7 +58,9 @@ class PrinterNotifyApp:
         self.page.on_route_change = self.route_change
         self.page.on_view_pop = self.view_pop
         self.page.on_error = lambda e: print(f"Page error: {e.data}")
-        self.page.go(self.page.route or "/")
+        # Build the initial view stack directly: navigate() to the already-current
+        # route is a no-op and won't fire on_route_change, leaving the page blank.
+        self.route_change(None)
         self.monitor_manager.sync(self.config.printers)
 
     # ------------------------------------------------------------------ setup
@@ -91,7 +93,7 @@ class PrinterNotifyApp:
         with self.update_lock:
             self.page.views.pop()
             top_view = self.page.views[-1]
-            self.page.go(top_view.route)
+            self.page.navigate(top_view.route)
 
     # ------------------------------------------------------------ dashboard
     def build_dashboard_view(self) -> ft.View:
@@ -114,7 +116,7 @@ class PrinterNotifyApp:
                     spacing=8,
                     tight=True,
                 ),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment.CENTER,
                 expand=True,
             )
         else:
@@ -122,18 +124,16 @@ class PrinterNotifyApp:
                                padding=16, expand=True)
 
         return ft.View(
-            "/",
-            [
-                ft.AppBar(
-                    title=ft.Text("Printer Notify Center"),
-                    center_title=False,
-                    actions=[
-                        ft.IconButton(ft.Icons.SETTINGS, tooltip="Settings",
-                                      on_click=lambda e: self.open_settings_dialog()),
-                    ],
-                ),
-                body,
-            ],
+            route="/",
+            controls=[body],
+            appbar=ft.AppBar(
+                title=ft.Text("Printer Notify Center"),
+                center_title=False,
+                actions=[
+                    ft.IconButton(ft.Icons.SETTINGS, tooltip="Settings",
+                                  on_click=lambda e: self.open_settings_dialog()),
+                ],
+            ),
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             floating_action_button=ft.FloatingActionButton(
                 icon=ft.Icons.ADD, tooltip="Add printer", on_click=lambda e: self.open_printer_dialog()
@@ -173,7 +173,7 @@ class PrinterNotifyApp:
                                         ft.IconButton(
                                             ft.Icons.TUNE,
                                             tooltip="Targets",
-                                            on_click=lambda e, p=printer: self.page.go(
+                                            on_click=lambda e, p=printer: self.page.navigate(
                                                 f"/printer/{p.id}"),
                                         ),
                                         ft.IconButton(
@@ -210,7 +210,7 @@ class PrinterNotifyApp:
             body = ft.Container(
                 content=ft.Text("No targets yet. Tap + to add one.",
                                 color=ft.Colors.OUTLINE),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment.CENTER,
                 expand=True,
             )
         else:
@@ -218,11 +218,9 @@ class PrinterNotifyApp:
                                padding=16, expand=True)
 
         return ft.View(
-            f"/printer/{printer.id}",
-            [
-                ft.AppBar(title=ft.Text(f"Targets — {printer.name}")),
-                body,
-            ],
+            route=f"/printer/{printer.id}",
+            controls=[body],
+            appbar=ft.AppBar(title=ft.Text(f"Targets — {printer.name}")),
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             floating_action_button=ft.FloatingActionButton(
                 icon=ft.Icons.ADD, tooltip="Add target", on_click=lambda e, p=printer: self.open_target_dialog(p)
@@ -311,12 +309,12 @@ class PrinterNotifyApp:
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
                 self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -338,7 +336,7 @@ class PrinterNotifyApp:
                      ft.FilledButton("Save", on_click=save)],
         )
         with self.update_lock:
-            self.page.open(dialog)
+            self.page.show_dialog(dialog)
 
     def toggle_printer(self, printer: Printer, value: bool) -> None:
         printer.enabled = value
@@ -351,12 +349,12 @@ class PrinterNotifyApp:
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
                 self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -367,7 +365,7 @@ class PrinterNotifyApp:
                 "Delete", on_click=confirm)],
         )
         with self.update_lock:
-            self.page.open(dialog)
+            self.page.show_dialog(dialog)
 
     # ----------------------------------------------------------- target CRUD
     def open_target_dialog(self, printer: Printer, target: Target | None = None) -> None:
@@ -375,7 +373,8 @@ class PrinterNotifyApp:
 
         preset_dropdown = ft.Dropdown(
             label="Preset",
-            options=[ft.dropdown.Option(p[0]) for p in TARGET_PRESETS],
+            options=[ft.dropdown.Option(key=p[0], text=p[0])
+                     for p in TARGET_PRESETS],
             value=TARGET_PRESETS[-1][0],
         )
         object_field = ft.TextField(
@@ -384,7 +383,7 @@ class PrinterNotifyApp:
             label="Field name", value=target.field_name if target else "", hint_text="e.g. state")
         operator_dropdown = ft.Dropdown(
             label="Operator",
-            options=[ft.dropdown.Option(op) for op in OPERATORS],
+            options=[ft.dropdown.Option(key=op, text=op) for op in OPERATORS],
             value=target.operator if target else OPERATORS[0],
             width=120,
         )
@@ -407,7 +406,7 @@ class PrinterNotifyApp:
                 with self.update_lock:
                     self.page.update()
 
-        preset_dropdown.on_change = apply_preset
+        preset_dropdown.on_select = apply_preset
 
         def save(e: ft.ControlEvent) -> None:
             if not object_field.value or not field_field.value or value_field.value == "":
@@ -433,12 +432,12 @@ class PrinterNotifyApp:
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
                 self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -460,7 +459,7 @@ class PrinterNotifyApp:
                      ft.FilledButton("Save", on_click=save)],
         )
         with self.update_lock:
-            self.page.open(dialog)
+            self.page.show_dialog(dialog)
 
     def toggle_target(self, printer: Printer, target: Target, value: bool) -> None:
         target.enabled = value
@@ -492,7 +491,7 @@ class PrinterNotifyApp:
             self.config.settings.use_in_app_notifications = in_app_switch.value
             self.config.save()
             with self.update_lock:
-                self.page.close(dialog)
+                self.page.pop_dialog()
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -502,7 +501,7 @@ class PrinterNotifyApp:
             actions=[ft.FilledButton("Done", on_click=save)],
         )
         with self.update_lock:
-            self.page.open(dialog)
+            self.page.show_dialog(dialog)
 
     # -------------------------------------------------------------- helpers
     def refresh_current_view(self) -> None:
@@ -511,7 +510,7 @@ class PrinterNotifyApp:
 
     def show_in_app_notification(self, title: str, message: str) -> None:
         with self.update_lock:
-            self.page.open(
+            self.page.show_dialog(
                 ft.SnackBar(
                     content=ft.Column(
                         [ft.Text(title, weight=ft.FontWeight.BOLD),
