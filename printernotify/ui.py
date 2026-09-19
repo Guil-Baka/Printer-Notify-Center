@@ -42,7 +42,9 @@ class PrinterNotifyApp:
         self.page = page
         self.config = AppConfig()
         self.config.load()
-        self.update_lock = threading.Lock()
+        # Reentrant because dialog handlers call refresh_current_view(), which
+        # re-enters route_change() while the lock is already held.
+        self.update_lock = threading.RLock()
 
         self.notifier = Notifier(self.config.settings,
                                  in_app_callback=self.show_in_app_notification)
@@ -55,6 +57,7 @@ class PrinterNotifyApp:
         self._setup_page()
         self.page.on_route_change = self.route_change
         self.page.on_view_pop = self.view_pop
+        self.page.on_error = lambda e: print(f"Page error: {e.data}")
         self.page.go(self.page.route or "/")
         self.monitor_manager.sync(self.config.printers)
 
@@ -73,20 +76,22 @@ class PrinterNotifyApp:
 
     # --------------------------------------------------------------- routing
     def route_change(self, e: ft.RouteChangeEvent) -> None:
-        route = self.page.route
-        self.page.views.clear()
-        self.page.views.append(self.build_dashboard_view())
-        if route.startswith("/printer/"):
-            printer_id = route.split("/printer/", 1)[1]
-            printer = self.config.get_printer(printer_id)
-            if printer is not None:
-                self.page.views.append(self.build_targets_view(printer))
-        self.page.update()
+        with self.update_lock:
+            route = self.page.route
+            self.page.views.clear()
+            self.page.views.append(self.build_dashboard_view())
+            if route.startswith("/printer/"):
+                printer_id = route.split("/printer/", 1)[1]
+                printer = self.config.get_printer(printer_id)
+                if printer is not None:
+                    self.page.views.append(self.build_targets_view(printer))
+            self.page.update()
 
     def view_pop(self, e: ft.ViewPopEvent) -> None:
-        self.page.views.pop()
-        top_view = self.page.views[-1]
-        self.page.go(top_view.route)
+        with self.update_lock:
+            self.page.views.pop()
+            top_view = self.page.views[-1]
+            self.page.go(top_view.route)
 
     # ------------------------------------------------------------ dashboard
     def build_dashboard_view(self) -> ft.View:
@@ -305,11 +310,13 @@ class PrinterNotifyApp:
                 )
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
-            self.page.close(dialog)
-            self.refresh_current_view()
+            with self.update_lock:
+                self.page.close(dialog)
+                self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
-            self.page.close(dialog)
+            with self.update_lock:
+                self.page.close(dialog)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -330,7 +337,8 @@ class PrinterNotifyApp:
             actions=[ft.TextButton("Cancel", on_click=cancel),
                      ft.FilledButton("Save", on_click=save)],
         )
-        self.page.open(dialog)
+        with self.update_lock:
+            self.page.open(dialog)
 
     def toggle_printer(self, printer: Printer, value: bool) -> None:
         printer.enabled = value
@@ -342,11 +350,13 @@ class PrinterNotifyApp:
             self.config.printers.remove(printer)
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
-            self.page.close(dialog)
-            self.refresh_current_view()
+            with self.update_lock:
+                self.page.close(dialog)
+                self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
-            self.page.close(dialog)
+            with self.update_lock:
+                self.page.close(dialog)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -356,7 +366,8 @@ class PrinterNotifyApp:
             actions=[ft.TextButton("Cancel", on_click=cancel), ft.FilledButton(
                 "Delete", on_click=confirm)],
         )
-        self.page.open(dialog)
+        with self.update_lock:
+            self.page.open(dialog)
 
     # ----------------------------------------------------------- target CRUD
     def open_target_dialog(self, printer: Printer, target: Target | None = None) -> None:
@@ -393,7 +404,8 @@ class PrinterNotifyApp:
                 operator_dropdown.value = op
                 value_field.value = val
                 message_field.value = msg
-                self.page.update()
+                with self.update_lock:
+                    self.page.update()
 
         preset_dropdown.on_change = apply_preset
 
@@ -420,11 +432,13 @@ class PrinterNotifyApp:
                 )
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
-            self.page.close(dialog)
-            self.refresh_current_view()
+            with self.update_lock:
+                self.page.close(dialog)
+                self.refresh_current_view()
 
         def cancel(e: ft.ControlEvent) -> None:
-            self.page.close(dialog)
+            with self.update_lock:
+                self.page.close(dialog)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -445,7 +459,8 @@ class PrinterNotifyApp:
             actions=[ft.TextButton("Cancel", on_click=cancel),
                      ft.FilledButton("Save", on_click=save)],
         )
-        self.page.open(dialog)
+        with self.update_lock:
+            self.page.open(dialog)
 
     def toggle_target(self, printer: Printer, target: Target, value: bool) -> None:
         target.enabled = value
@@ -456,7 +471,8 @@ class PrinterNotifyApp:
         printer.targets.remove(target)
         self.config.save()
         self.monitor_manager.sync(self.config.printers)
-        self.refresh_current_view()
+        with self.update_lock:
+            self.refresh_current_view()
 
     # -------------------------------------------------------------- settings
     def open_settings_dialog(self) -> None:
@@ -475,7 +491,8 @@ class PrinterNotifyApp:
             self.config.settings.use_native_notifications = native_switch.value
             self.config.settings.use_in_app_notifications = in_app_switch.value
             self.config.save()
-            self.page.close(dialog)
+            with self.update_lock:
+                self.page.close(dialog)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -484,11 +501,13 @@ class PrinterNotifyApp:
                               info_text], tight=True, spacing=10, width=380),
             actions=[ft.FilledButton("Done", on_click=save)],
         )
-        self.page.open(dialog)
+        with self.update_lock:
+            self.page.open(dialog)
 
     # -------------------------------------------------------------- helpers
     def refresh_current_view(self) -> None:
-        self.route_change(None)
+        with self.update_lock:
+            self.route_change(None)
 
     def show_in_app_notification(self, title: str, message: str) -> None:
         with self.update_lock:
