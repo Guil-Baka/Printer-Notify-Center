@@ -2,6 +2,7 @@ import http.server
 import re
 import socketserver
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -11,7 +12,10 @@ from unittest.mock import Mock, patch
 
 import imageio_ffmpeg
 
-from printernotify.camera import capture_frame, render_timelapse, validate_camera_url
+from printernotify.camera import (
+    acquire_rtsp_stream, capture_frame, release_rtsp_stream,
+    render_timelapse, validate_camera_url,
+)
 from printernotify.models import CameraSettings, Printer
 from printernotify.timelapse import TimelapseRecorder
 
@@ -110,6 +114,113 @@ class TimelapseTests(unittest.TestCase):
         self.notifier.notify.assert_called_once()
         self.assertEqual(0, self.recorder._frame_count)
 
+    @patch("printernotify.timelapse.release_rtsp_stream")
+    @patch("printernotify.timelapse.acquire_rtsp_stream")
+    @patch("printernotify.timelapse.render_timelapse")
+    def test_rtsp_stream_is_reused_across_progress_and_pause(self, render, acquire, release):
+        self.settings.url = "rtsp://host/live"
+        stream = acquire.return_value
+        stream.url = self.settings.url
+        stream.snapshot.return_value = b"frame"
+        self.recorder._update(status(progress=0))
+        self.recorder._update(status(progress=0.005))
+        self.recorder._update(status(state="paused"))
+        self.recorder._update(None)
+        self.recorder._update(status(progress=0.01))
+        self.assertEqual(3, stream.snapshot.call_count)
+        acquire.assert_called_once_with(self.settings.url)
+        release.assert_not_called()
+        self.recorder._update(status(state="complete", progress=1))
+        release.assert_called_once_with(stream)
+
+    @patch("printernotify.timelapse.time.monotonic")
+    @patch("printernotify.timelapse.release_rtsp_stream")
+    @patch("printernotify.timelapse.acquire_rtsp_stream")
+    @patch("printernotify.timelapse.render_timelapse")
+    def test_rtsp_time_schedule_and_url_change(self, render, acquire, release, clock):
+        self.settings.url = "rtsp://host/one"
+        self.settings.capture_mode = "time"
+        self.settings.interval = 2
+        first = Mock(url=self.settings.url)
+        first.snapshot.return_value = b"first"
+        second = Mock(url="rtsp://host/two")
+        second.snapshot.return_value = b"second"
+        acquire.side_effect = [first, second]
+        clock.return_value = 10
+        self.recorder._update(status())
+        clock.return_value = 12
+        self.recorder._update(status())
+        self.assertEqual(2, first.snapshot.call_count)
+        acquire.assert_called_once_with("rtsp://host/one")
+        self.settings.url = second.url
+        clock.return_value = 14
+        self.recorder._update(status())
+        release.assert_called_once_with(first)
+        second.snapshot.assert_called_once()
+        self.settings.timelapse_enabled = False
+        self.recorder._update(status())
+        release.assert_called_with(second)
+
+    def test_authentication_failure_pauses_retries_even_after_release(self):
+        real_popen = subprocess.Popen
+        url = "rtsp://auth-test.invalid/live"
+
+        def denied(*args, **kwargs):
+            return real_popen(
+                [sys.executable, "-c", "import sys; sys.stderr.write('Server returned 401 Unauthorized')"],
+                **kwargs,
+            )
+
+        with patch("printernotify.camera.subprocess.Popen", side_effect=denied) as popen:
+            stream = acquire_rtsp_stream(url)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+                    stream.snapshot()
+            finally:
+                release_rtsp_stream(stream)
+            stream = acquire_rtsp_stream(url)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "retries are paused"):
+                    stream.snapshot()
+                self.assertEqual(1, popen.call_count)
+            finally:
+                release_rtsp_stream(stream)
+
+    def test_disconnect_discards_stale_frame_and_reconnects(self):
+        real_popen = subprocess.Popen
+        url = "rtsp://reconnect-test.invalid/live"
+        count = 0
+
+        def fake_ffmpeg(*args, **kwargs):
+            nonlocal count
+            count += 1
+            frame = "first" if count == 1 else "second"
+            delay = 0.5 if count == 1 else 10
+            script = (
+                "import sys,time; "
+                f"sys.stdout.buffer.write(b'\\xff\\xd8{frame}\\xff\\xd9'); "
+                f"sys.stdout.flush(); time.sleep({delay})"
+            )
+            return real_popen([sys.executable, "-u", "-c", script], **kwargs)
+
+        with patch("printernotify.camera.subprocess.Popen", side_effect=fake_ffmpeg), \
+             patch("printernotify.camera._RETRY_INITIAL_SECONDS", 1), \
+             patch("printernotify.camera.random.uniform", return_value=0):
+            stream = acquire_rtsp_stream(url)
+            try:
+                self.assertEqual(b"\xff\xd8first\xff\xd9", stream.snapshot())
+                deadline = time.monotonic() + 4
+                while stream._error is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                with self.assertRaisesRegex(RuntimeError, "disconnected"):
+                    stream.snapshot()
+                while (count < 2 or stream._frame is None) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(2, count)
+                self.assertEqual(b"\xff\xd8second\xff\xd9", stream.snapshot())
+            finally:
+                release_rtsp_stream(stream)
+
     @patch("printernotify.timelapse.capture_frame", return_value=b"frame")
     def test_worker_captures_by_time_without_another_status_poll(self, capture):
         self.settings.capture_mode = "time"
@@ -192,9 +303,11 @@ class TimelapseTests(unittest.TestCase):
     def test_actual_rtsp_frame_capture(self):
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         handler_done = threading.Event()
+        connections = []
 
         class RTSPHandler(socketserver.StreamRequestHandler):
             def handle(self):
+                connections.append(1)
                 sender = None
                 try:
                     while True:
@@ -258,9 +371,30 @@ class TimelapseTests(unittest.TestCase):
             worker = threading.Thread(target=server.serve_forever, daemon=True)
             worker.start()
             try:
-                frame = capture_frame(f"rtsp://127.0.0.1:{server.server_address[1]}/live")
+                url = f"rtsp://127.0.0.1:{server.server_address[1]}/live"
+                frame = capture_frame(url)
                 self.assertTrue(frame.startswith(b"\xff\xd8"))
                 self.assertTrue(frame.endswith(b"\xff\xd9"))
+                stream = acquire_rtsp_stream(url)
+                shared = acquire_rtsp_stream(url)
+                first_released = False
+                try:
+                    self.assertIs(stream, shared)
+                    frame = stream.snapshot()
+                    first_frame_time = stream._frame_time
+                    deadline = time.monotonic() + 5
+                    while stream._frame_time <= first_frame_time and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertGreater(stream._frame_time, first_frame_time)
+                    self.assertTrue(shared.snapshot().startswith(b"\xff\xd8"))
+                    self.assertEqual(2, len(connections))
+                    release_rtsp_stream(stream)
+                    first_released = True
+                    self.assertTrue(shared.snapshot().endswith(b"\xff\xd9"))
+                finally:
+                    if not first_released:
+                        release_rtsp_stream(stream)
+                    release_rtsp_stream(shared)
             finally:
                 server.shutdown()
                 worker.join(timeout=3)

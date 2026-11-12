@@ -9,9 +9,13 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
-from .camera import capture_frame, render_timelapse, validate_camera_url
+from .camera import (
+    RTSPStream, acquire_rtsp_stream, capture_frame, release_rtsp_stream,
+    render_timelapse, validate_camera_url,
+)
 from .models import Printer
 from .storage import printer_folder_name, videos_dir
 
@@ -31,6 +35,12 @@ class TimelapseRecorder:
         self._next_percent: float | None = None
         self._active = False
         self._error_reported = False
+        self._stream: RTSPStream | None = None
+
+    def _release_stream(self) -> None:
+        if self._stream is not None:
+            release_rtsp_stream(self._stream)
+            self._stream = None
 
     def start(self) -> None:
         self._thread.start()
@@ -59,6 +69,7 @@ class TimelapseRecorder:
         self._error_reported = False
 
     def _finish(self) -> None:
+        self._release_stream()
         directory = self._directory
         if directory is not None and self._frame_count:
             try:
@@ -76,7 +87,14 @@ class TimelapseRecorder:
         settings = self.printer.camera
         succeeded = False
         try:
-            frame = capture_frame(settings.url)
+            if self._stream is not None and self._stream.url != settings.url:
+                self._release_stream()
+            if urlparse(settings.url).scheme in ("rtsp", "rtsps"):
+                if self._stream is None:
+                    self._stream = acquire_rtsp_stream(settings.url)
+                frame = self._stream.snapshot()
+            else:
+                frame = capture_frame(settings.url)
             if self._directory is None:
                 raise RuntimeError("Timelapse output directory is unavailable.")
             path = self._directory / f"frame-{self._frame_count + 1:06d}.jpg"
@@ -101,6 +119,8 @@ class TimelapseRecorder:
         if not settings.timelapse_enabled:
             if self._directory is not None:
                 self._finish()
+            else:
+                self._release_stream()
             return
         try:
             validate_camera_url(settings.url)
@@ -116,8 +136,11 @@ class TimelapseRecorder:
                 raise ValueError("Video FPS must be between 1 and 120.")
         except (TypeError, ValueError) as exc:
             self._active = False
+            self._release_stream()
             self._report_error("Invalid timelapse settings", exc)
             return
+        if self._stream is not None and self._stream.url != settings.url:
+            self._release_stream()
         if status is None:
             self._active = False
             return
@@ -164,15 +187,18 @@ class TimelapseRecorder:
             self._capture(percent)
 
     def _run(self) -> None:
-        while True:
-            timeout = None
-            if self._active and self.printer.camera.capture_mode == "time":
-                timeout = max(0.0, self._next_time - time.monotonic())
-            try:
-                status = self._events.get(timeout=timeout)
-            except queue.Empty:
-                self._capture(None)
-                continue
-            if status is not None and status.get("_stop"):
-                return
-            self._update(status)
+        try:
+            while True:
+                timeout = None
+                if self._active and self.printer.camera.capture_mode == "time":
+                    timeout = max(0.0, self._next_time - time.monotonic())
+                try:
+                    status = self._events.get(timeout=timeout)
+                except queue.Empty:
+                    self._capture(None)
+                    continue
+                if status is not None and status.get("_stop"):
+                    return
+                self._update(status)
+        finally:
+            self._release_stream()

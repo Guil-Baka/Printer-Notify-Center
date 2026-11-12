@@ -4,12 +4,13 @@ from __future__ import annotations
 import math
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 import flet as ft
 import requests
 
 from .config import AppConfig
-from .camera import capture_frame, validate_camera_url
+from .camera import acquire_rtsp_stream, capture_frame, release_rtsp_stream, validate_camera_url
 from .models import CameraSettings, OPERATORS, TARGET_PRESETS, Printer, Settings, Target
 from .monitor import MonitorManager
 from .notifier import Notifier, show_popup_notification
@@ -477,34 +478,44 @@ class PrinterNotifyApp:
 
         def refresh() -> None:
             nonlocal image
-            while not stop.is_set():
-                try:
-                    frame = capture_frame(url)
-                    with self.update_lock:
-                        if stop.is_set():
-                            return
-                        if image is None:
-                            image = ft.Image(
-                                src=frame, width=640, height=360, fit=ft.BoxFit.CONTAIN
-                            )
-                            preview.content = image
+            stream = None
+            try:
+                while not stop.is_set():
+                    try:
+                        if urlparse(url).scheme in ("rtsp", "rtsps"):
+                            if stream is None:
+                                stream = acquire_rtsp_stream(url)
+                            frame = stream.snapshot()
                         else:
-                            image.src = frame
-                        status.value = "Live preview (refreshed snapshots)"
-                        self.page.update()
-                except requests.RequestException:
-                    with self.update_lock:
-                        if stop.is_set():
-                            return
-                        status.value = "Camera preview failed. Check the snapshot URL and connection."
-                        self.page.update()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    with self.update_lock:
-                        if stop.is_set():
-                            return
-                        status.value = f"Camera preview failed: {exc}"
-                        self.page.update()
-                stop.wait(2)
+                            frame = capture_frame(url)
+                        with self.update_lock:
+                            if stop.is_set():
+                                return
+                            if image is None:
+                                image = ft.Image(
+                                    src=frame, width=640, height=360, fit=ft.BoxFit.CONTAIN
+                                )
+                                preview.content = image
+                            else:
+                                image.src = frame
+                            status.value = "Live preview (refreshed snapshots)"
+                            self.page.update()
+                    except requests.RequestException:
+                        with self.update_lock:
+                            if stop.is_set():
+                                return
+                            status.value = "Camera preview failed. Check the snapshot URL and connection."
+                            self.page.update()
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        with self.update_lock:
+                            if stop.is_set():
+                                return
+                            status.value = f"Camera preview failed: {exc}"
+                            self.page.update()
+                    stop.wait(2)
+            finally:
+                if stream is not None:
+                    release_rtsp_stream(stream)
 
         threading.Thread(target=refresh, daemon=True).start()
 

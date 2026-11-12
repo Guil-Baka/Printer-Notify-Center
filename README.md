@@ -55,6 +55,14 @@ Mainsail's webcam settings. A Mainsail stream URL is not a snapshot URL; use
 the snapshot address, not the MJPEG stream address. Camera URLs are entered
 manually, not discovered automatically. The Preview button displays refreshed
 frames approximately every two seconds, rather than a full-frame-rate stream.
+RTSP preview and timelapse share one continuous connection for the same URL.
+The connection remains open while either is using it, including while a print
+is paused or the printer is offline, and closes when both are finished.
+If the stream disconnects or stops delivering frames, the app retries with
+increasing delays (up to five minutes, plus jitter). Authentication or access
+denial pauses retries for that URL until the app is restarted or the URL is
+changed, to avoid repeatedly attempting a blocked login. Other clients can
+still make their own connections; check the camera's lockout policy.
 If an RTSP preview cannot connect, check that the camera's RTSP service is
 running and reachable from this computer, and use the full stream URL,
 including any required application and stream path.

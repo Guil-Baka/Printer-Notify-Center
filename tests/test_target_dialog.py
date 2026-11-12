@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import msgpack
 from flet.controls.base_control import BaseControl
@@ -201,7 +201,11 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
             release.wait(5)
             return frame
 
-        with patch("printernotify.ui.capture_frame", side_effect=capture):
+        stream = Mock()
+        stream.snapshot.side_effect = lambda: capture("rtsp://host/live")
+        released = threading.Event()
+        with patch("printernotify.ui.acquire_rtsp_stream", return_value=stream), \
+             patch("printernotify.ui.release_rtsp_stream", side_effect=lambda _: released.set()):
             self.app.open_camera_preview("rtsp://host/live", "Printer")
             dialog = self.page._dialogs.controls[-1]
             preview, status = dialog.content.controls
@@ -220,11 +224,14 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 release.set()
                 dialog.actions[0].on_click(None)
+                self.assertTrue(released.wait(3))
 
     async def test_camera_preview_reports_failure_without_empty_image(self):
-        with patch("printernotify.ui.capture_frame", side_effect=RuntimeError(
-            "Could not connect to the RTSP camera."
-        )):
+        stream = Mock()
+        stream.snapshot.side_effect = RuntimeError("Could not connect to the RTSP camera.")
+        released = threading.Event()
+        with patch("printernotify.ui.acquire_rtsp_stream", return_value=stream), \
+             patch("printernotify.ui.release_rtsp_stream", side_effect=lambda _: released.set()):
             self.app.open_camera_preview("rtsp://host/live", "Printer")
             dialog = self.page._dialogs.controls[-1]
             preview, status = dialog.content.controls
@@ -237,6 +244,7 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Could not connect", status.value)
             finally:
                 dialog.actions[0].on_click(None)
+                self.assertTrue(released.wait(3))
 
 
 if __name__ == "__main__":
