@@ -5,6 +5,10 @@ A small cross-platform (Windows / macOS / Linux) desktop app that watches one or
 you when configured targets are hit — e.g. print finished, a temperature reached, print
 progress crossed a threshold, or the printer entered an error state.
 
+# Motivation Behind it
+
+I normally print projects which are many different pieces that will be connected at the end. I wanted to be notified when the Bed had cooled enough for me to take the piece off while avoiding warping due to a still warm bed. So I created this with adjustable values you can set to be notified off. I don't know, might help someone.
+
 ## Features
 
 - Configure any number of Moonraker endpoints (host, port, optional API key, poll interval).
