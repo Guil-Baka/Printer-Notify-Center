@@ -47,6 +47,7 @@ storage/
 # --- App config / local data (contains printer hosts, API keys) ---
 config.json
 *.local.json
+Videos/
 
 # --- OS ---
 .DS_Store

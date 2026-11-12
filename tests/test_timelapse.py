@@ -29,8 +29,11 @@ class TimelapseTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.settings = CameraSettings(
             url="http://localhost/snapshot", timelapse_enabled=True,
-            capture_mode="percentage", interval=0.5, output_dir=self.temp.name,
+            capture_mode="percentage", interval=0.5,
         )
+        self.videos_patch = patch("printernotify.timelapse.videos_dir", return_value=Path(self.temp.name))
+        self.videos_patch.start()
+        self.addCleanup(self.videos_patch.stop)
         self.printer = Printer("Printer", "localhost", camera=self.settings)
         self.notifier = Mock()
         self.recorder = TimelapseRecorder(self.printer, self.notifier)
@@ -58,7 +61,8 @@ class TimelapseTests(unittest.TestCase):
             sorted(p.name for p in directory.iterdir()),
         )
         self.recorder._update(status(state="complete", progress=1.0))
-        render.assert_called_once_with(directory, 30)
+        render.assert_called_once_with(directory, 30, directory.parent / f"{directory.name}.mp4")
+        self.assertEqual(Path(self.temp.name) / "Printer", directory.parent)
         self.assertEqual(4, capture.call_count)
         self.assertIsNone(self.recorder._directory)
 
@@ -91,11 +95,11 @@ class TimelapseTests(unittest.TestCase):
             self.recorder._update(status())
             directory = self.recorder._directory
             self.recorder._update(status(state=state))
-            render.assert_called_with(directory, 30)
+            render.assert_called_with(directory, 30, directory.parent / f"{directory.name}.mp4")
         self.recorder._update(status(filename="first.gcode"))
         directory = self.recorder._directory
         self.recorder._update(status(filename="second.gcode"))
-        render.assert_called_with(directory, 30)
+        render.assert_called_with(directory, 30, directory.parent / f"{directory.name}.mp4")
         self.assertNotEqual(directory, self.recorder._directory)
 
     @patch("printernotify.timelapse.capture_frame", side_effect=RuntimeError("unavailable"))
@@ -295,14 +299,17 @@ class TimelapseTests(unittest.TestCase):
         directory = Path(self.temp.name)
         (directory / "frame-000001.jpg").write_bytes(captured)
         (directory / "frame-000002.jpg").write_bytes(captured)
-        output = render_timelapse(directory, 30)
+        output = render_timelapse(directory, 30, directory / "20261112-120000.mp4")
         self.assertTrue(output.is_file())
+        self.assertEqual("20261112-120000.mp4", output.name)
         result = subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(output),
              "-f", "null", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
         )
         self.assertEqual(0, result.returncode, result.stderr.decode(errors="replace"))
+        with self.assertRaises(FileExistsError):
+            render_timelapse(directory, 30, output)
 
 
 if __name__ == "__main__":

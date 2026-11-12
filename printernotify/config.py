@@ -4,15 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from platformdirs import user_config_dir
-
 from .models import Printer, Settings
-
-APP_NAME = "PrinterNotifyCenter"
+from .storage import app_dir
 
 
 def config_dir() -> Path:
-    path = Path(user_config_dir(APP_NAME))
+    path = app_dir()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -30,10 +27,7 @@ class AppConfig:
         path = config_path()
         if not path.exists():
             return
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
+        data = json.loads(path.read_text(encoding="utf-8"))
         self.printers = [Printer.from_dict(p)
                          for p in data.get("printers", [])]
         self.settings = Settings.from_dict(data.get("settings", {}))

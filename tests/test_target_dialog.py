@@ -166,7 +166,7 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
         button = card.content.content.controls[0].controls[1].controls[4]
         await self.session.dispatch_event(button._i, "click", None)
         dialog = self.page._dialogs.controls[-1]
-        url, enabled, mode, interval, fps, output, _, error = dialog.content.controls
+        url, enabled, mode, interval, fps, _, error = dialog.content.controls
         self.session.apply_patch(enabled._i, {"value": True})
         await self.session.dispatch_event(dialog.actions[2]._i, "click", None)
         self.assertTrue(dialog.open)
@@ -181,15 +181,14 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
         self.session.apply_patch(mode._i, {"value": "percentage"})
         self.session.apply_patch(interval._i, {"value": "0.5"})
         self.session.apply_patch(fps._i, {"value": "24"})
-        self.session.apply_patch(output._i, {"value": "example-folder"})
         await self.session.dispatch_event(dialog.actions[2]._i, "click", None)
         self.assertFalse(dialog.open)
         self.assertEqual(1, self.config.saved)
         self.assertEqual(
-            ("rtsp://camera/live", True, "percentage", 0.5, 24, "example-folder"),
+            ("rtsp://camera/live", True, "percentage", 0.5, 24),
             (self.printer.camera.url, self.printer.camera.timelapse_enabled,
              self.printer.camera.capture_mode, self.printer.camera.interval,
-             self.printer.camera.fps, self.printer.camera.output_dir),
+             self.printer.camera.fps),
         )
 
     async def test_camera_preview_waits_for_a_valid_frame(self):

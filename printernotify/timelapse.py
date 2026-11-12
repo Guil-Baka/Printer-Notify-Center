@@ -11,10 +11,9 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from platformdirs import user_videos_path
-
 from .camera import capture_frame, render_timelapse, validate_camera_url
 from .models import Printer
+from .storage import printer_folder_name, videos_dir
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +48,7 @@ class TimelapseRecorder:
             self._error_reported = True
 
     def _begin(self, filename: str) -> None:
-        settings = self.printer.camera
-        base = Path(settings.output_dir).expanduser() if settings.output_dir else (
-            user_videos_path() / "Printer Notify Center"
-        )
+        base = videos_dir() / printer_folder_name(self.printer.name)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._directory = base / f"{stamp}-{self.printer.id}-{uuid.uuid4().hex[:8]}"
         self._directory.mkdir(parents=True, exist_ok=False)
@@ -66,7 +62,10 @@ class TimelapseRecorder:
         directory = self._directory
         if directory is not None and self._frame_count:
             try:
-                render_timelapse(directory, self.printer.camera.fps)
+                render_timelapse(
+                    directory, self.printer.camera.fps,
+                    directory.parent / f"{directory.name}.mp4",
+                )
             except (OSError, RuntimeError, ValueError) as exc:
                 self._error_reported = False
                 self._report_error("Could not create video; photos were retained", exc)

@@ -57,7 +57,6 @@ class CameraSettings:
     timelapse_enabled: bool = False
     capture_mode: str = "time"
     interval: float = 30.0
-    output_dir: str = ""
     fps: int = 30
 
     def to_dict(self) -> dict:

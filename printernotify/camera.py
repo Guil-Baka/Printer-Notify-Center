@@ -67,9 +67,11 @@ def capture_frame(url: str) -> bytes:
     return frame
 
 
-def render_timelapse(directory: Path, fps: int) -> Path:
-    output = directory / "timelapse.mp4"
+def render_timelapse(directory: Path, fps: int, output: Path | None = None) -> Path:
+    output = output or directory / "timelapse.mp4"
     temporary = directory / "timelapse.partial.mp4"
+    if output.exists():
+        raise FileExistsError(f"Timelapse output already exists: {output}")
     try:
         subprocess.run(
             [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
@@ -79,7 +81,9 @@ def render_timelapse(directory: Path, fps: int) -> Path:
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=600,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        temporary.replace(output)
+        if output.exists():
+            raise FileExistsError(f"Timelapse output already exists: {output}")
+        temporary.rename(output)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Timelapse rendering timed out; photos were retained.") from exc
     except subprocess.CalledProcessError as exc:

@@ -5,33 +5,47 @@ A small cross-platform (Windows / macOS / Linux) desktop app that watches one or
 you when configured targets are hit — e.g. print finished, a temperature reached, print
 progress crossed a threshold, or the printer entered an error state.
 
-# Motivation Behind it
+## Motivation
 
-I normally print projects which are many different pieces that will be connected at the end. I wanted to be notified when the Bed had cooled enough for me to take the piece off while avoiding warping due to a still warm bed. So I created this with adjustable values you can set to be notified off. I don't know, might help someone.
+I often print projects with many pieces that will be assembled later. I wanted
+to know when the bed had cooled enough to remove a part without risking warping,
+so I created an app with adjustable notification targets. I hope it helps others
+too.
 
 ## Features
 
 - Configure any number of Moonraker endpoints (host, port, optional API key, poll interval).
+- See each printer's connection status, print state, progress, and temperatures
+  when Moonraker provides them; enable or disable monitoring per printer.
 - Define arbitrary "targets": watch any Moonraker object field with an operator
   (`>=`, `<=`, `>`, `<`, `==`, `!=`) and a threshold value. Notifies once when the
-  condition transitions from not-met to met.
+  condition transitions from not-met to met. Presets cover completion, errors,
+  progress, extruder temperature, and bed temperature.
 - OS native notifications (Windows toast, macOS notification center, Linux libnotify)
-  via `plyer`, with automatic fallback to an in-app popup if native notifications
+  via `plyer`, with automatic fallback to a standalone popup if native notifications
   aren't available on the current OS.
-- A settings toggle to force in-app popups on, or disable native notifications entirely,
-  for users who prefer not to use OS notifications.
-- Config persisted as JSON in the OS-appropriate user config directory.
+- Enable popup notifications independently, test notification channels, and choose
+  a custom popup sound.
+- Configuration and timelapses are saved next to the executable (or in the
+  project folder when running from source).
 - One manually configured RTSP camera or Mainsail-compatible JPEG snapshot URL per
   printer, with a periodically refreshed preview.
 - Timelapses captured by elapsed time or print progress, with photos and an MP4
   saved locally when a print completes, is cancelled, or errors.
 
-## Setup
+## Getting started
 
-```powershell
-pip install -r requirements.txt
-python main.py
-```
+1. Start the app using the instructions in [Running from source](#running-from-source)
+   or [Building a standalone app](#building-a-standalone-app).
+2. Select **Add printer** and enter the Moonraker host, port, and optional API
+   key. Enable HTTPS if the endpoint uses it.
+3. On the printer card, select **Targets** and add a preset or a custom target.
+   For example, use the bed temperature preset with `<=` and a threshold of `40`
+   to be notified when the bed cools to 40 °C.
+4. Optionally select **Camera and timelapse** to configure a camera, then open
+   **Settings** to choose and test your notification channels.
+
+The app must be running to monitor printers and send notifications.
 
 ## Cameras and timelapses
 
@@ -48,24 +62,54 @@ Existing RTMP URLs are no longer supported: replace each with the camera's
 actual RTSP or HTTP(S) snapshot URL. Changing only the URL scheme does not
 convert an RTMP stream into an RTSP stream.
 
-Enable timelapses and choose either seconds or percentage, an interval, the
-video playback FPS (default 30), and optionally an output folder. Percentage
-values are percentages, so `0.5` means one frame every half percent. The first
+Enable timelapses and choose a capture mode, an interval, and the video playback
+FPS (default 30). For time-based capture, the interval is in seconds; for
+progress-based capture, it is in percentage points, so `0.5` means one frame
+every half percent. The first
 frame is taken when an active print is observed; subsequent percentage crossings
 are checked at the printer's polling interval. If progress jumps across several
 thresholds, only one frame is taken because past images cannot be recovered.
 Time-based intervals have a 0.1-second minimum and run independently of printer polling; a slow camera can
-delay the next frame.
+delay the next frame. The video FPS controls playback speed, not capture frequency.
 
 Capture pauses when a print is paused or the printer is offline. On completion,
 cancellation or error, the app retains the numbered JPEG frames and generates
-`timelapse.mp4` in a separate print folder under the OS Videos directory
-(`Printer Notify Center`), or under the configured output folder. Keep the app
+an MP4 named with the date and time under `Videos/<printer name>` next to the
+app. Numbered JPEG photos are kept in a matching dated subfolder. Keep the app
 running until the print finishes and video rendering completes. If the app is
 closed or the printer is disabled during a print, captured photos remain but
 the unfinished video is not automatically resumed. Camera and rendering errors
 are reported via notifications. Camera URLs, including any embedded credentials,
 are stored in the app's local configuration file.
+
+## Data and migration
+
+The app stores configuration and recordings next to its executable, or in the
+project directory when running from source:
+
+```text
+App folder/
+  config.json
+  Videos/
+    Printer name/
+      20261112-173716-<printer-id>-<id>.mp4
+      20261112-173716-<printer-id>-<id>/
+        frame-000001.jpg
+        ...
+```
+
+Each recording gets a separate timestamped photo folder and MP4. Characters
+that are unsafe in folder names are replaced. Per-printer custom output folders
+are no longer used.
+
+On first launch, settings are moved from the previous user configuration
+directory, unless a configuration already exists beside the app. In that case
+the existing local configuration is used and the old one is retained. The app
+also moves identifiable timelapse folders from the old Videos location and
+configured custom output folders. Other files in custom folders are left alone.
+Make sure the app folder is writable. Renamed or manually moved recordings may
+need to be moved manually. Configuration may contain printer and camera
+credentials; keep it private and do not distribute it with the app.
 
 `imageio-ffmpeg` supplies an FFmpeg executable on supported platforms; standalone
 app packaging must include its binary. Native binaries are platform-specific.
@@ -81,7 +125,7 @@ so they can run without a connected printer or desktop notification daemon:
 python -m unittest discover -s tests -v
 ```
 
-## Running (development)
+## Running from source
 
 1. Create and activate a virtual environment (optional but recommended):
 
@@ -132,8 +176,12 @@ by end users).
    keep it in the project root when building. Review the output before
    distributing it, especially if you keep other private files in the project.
 
-3. Find the packaged app in the `build/<platform>` folder and distribute/run it
-   directly — it bundles its own Python runtime.
+3. Find the packaged app in `build/<platform>` and copy the entire folder to a
+   separate writable location before running it. It bundles its own Python runtime.
+   **Flet deletes and replaces the build output on subsequent builds.** Running
+   the app from `build/<platform>` can therefore cause its configuration and
+   videos to be deleted by a rebuild. Back up these files before rebuilding or
+   replacing an existing installation.
 
 ## Dependency updates
 

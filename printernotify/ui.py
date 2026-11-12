@@ -13,6 +13,7 @@ from .camera import capture_frame, validate_camera_url
 from .models import CameraSettings, OPERATORS, TARGET_PRESETS, Printer, Settings, Target
 from .monitor import MonitorManager
 from .notifier import Notifier, show_popup_notification
+from .storage import migrate_legacy_data
 
 
 def format_status(info: dict | None) -> tuple[str, str]:
@@ -393,8 +394,6 @@ class PrinterNotifyApp:
         interval = ft.TextField(label="Interval (seconds or %)",
                                 value=str(settings.interval))
         fps = ft.TextField(label="Video FPS", value=str(settings.fps))
-        output = ft.TextField(label="Output folder (blank = Videos)",
-                              value=settings.output_dir)
         error = ft.Text("", color=ft.Colors.ERROR)
 
         def preview(e: ft.ControlEvent) -> None:
@@ -433,7 +432,7 @@ class PrinterNotifyApp:
             printer.camera = CameraSettings(
                 url=camera_url, timelapse_enabled=enabled.value,
                 capture_mode=mode.value, interval=value,
-                output_dir=output.value.strip(), fps=frame_rate,
+                fps=frame_rate,
             )
             self.config.save()
             self.monitor_manager.sync(self.config.printers)
@@ -443,7 +442,7 @@ class PrinterNotifyApp:
         dialog = ft.AlertDialog(
             modal=True, title=ft.Text(f"Camera and timelapse — {printer.name}"),
             content=ft.Column(
-                [url, enabled, mode, interval, fps, output,
+                [url, enabled, mode, interval, fps,
                  ft.Text("Progress capture is checked at the printer poll interval.",
                          size=12, color=ft.Colors.OUTLINE), error],
                 tight=True, spacing=10, width=420, scroll=ft.ScrollMode.AUTO,
@@ -758,4 +757,9 @@ class PrinterNotifyApp:
 
 
 def main(page: ft.Page) -> None:
-    PrinterNotifyApp(page)
+    try:
+        migrate_legacy_data()
+        PrinterNotifyApp(page)
+    except (OSError, ValueError) as exc:
+        page.add(ft.Text(f"Could not load or migrate application data: {exc}",
+                         color=ft.Colors.ERROR, selectable=True))
