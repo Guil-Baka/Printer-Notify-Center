@@ -1,13 +1,16 @@
 """Flet UI for Printer Notify Center."""
 from __future__ import annotations
 
+import math
 import threading
 from pathlib import Path
 
 import flet as ft
+import requests
 
 from .config import AppConfig
-from .models import OPERATORS, TARGET_PRESETS, Printer, Settings, Target
+from .camera import capture_frame, validate_camera_url
+from .models import CameraSettings, OPERATORS, TARGET_PRESETS, Printer, Settings, Target
 from .monitor import MonitorManager
 from .notifier import Notifier, show_popup_notification
 
@@ -190,6 +193,11 @@ class PrinterNotifyApp:
                                             on_click=lambda e, p=printer: self.delete_printer(
                                                 p),
                                         ),
+                                        ft.IconButton(
+                                            ft.Icons.VIDEOCAM,
+                                            tooltip="Camera and timelapse",
+                                            on_click=lambda e, p=printer: self.open_camera_dialog(p),
+                                        ),
                                     ],
                                     spacing=0,
                                 ),
@@ -368,6 +376,138 @@ class PrinterNotifyApp:
         )
         with self.update_lock:
             self.page.show_dialog(dialog)
+
+    def open_camera_dialog(self, printer: Printer) -> None:
+        settings = printer.camera
+        url = ft.TextField(
+            label="Camera URL", value=settings.url,
+            hint_text="HTTP(S) JPEG snapshot or RTMP(S) stream",
+        )
+        enabled = ft.Switch(label="Record timelapses while printing",
+                            value=settings.timelapse_enabled)
+        mode = ft.Dropdown(
+            label="Capture by", value=settings.capture_mode,
+            options=[ft.dropdown.Option(key="time", text="Time (seconds)"),
+                     ft.dropdown.Option(key="percentage", text="Print progress (%)")],
+        )
+        interval = ft.TextField(label="Interval (seconds or %)",
+                                value=str(settings.interval))
+        fps = ft.TextField(label="Video FPS", value=str(settings.fps))
+        output = ft.TextField(label="Output folder (blank = Videos)",
+                              value=settings.output_dir)
+        error = ft.Text("", color=ft.Colors.ERROR)
+
+        def preview(e: ft.ControlEvent) -> None:
+            try:
+                validate_camera_url(url.value.strip())
+            except ValueError as exc:
+                error.value = str(exc)
+                self.page.update()
+                return
+            self.open_camera_preview(url.value.strip(), printer.name)
+
+        def save(e: ft.ControlEvent) -> None:
+            try:
+                camera_url = url.value.strip()
+                if camera_url:
+                    validate_camera_url(camera_url)
+                elif enabled.value:
+                    raise ValueError("A camera URL is required for timelapses.")
+                value = float(interval.value)
+                frame_rate = int(fps.value)
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError("The interval must be a positive finite number.")
+                if mode.value not in ("time", "percentage"):
+                    raise ValueError("Select a capture mode.")
+                if mode.value == "time" and value < 0.1:
+                    raise ValueError("The time interval must be at least 0.1 seconds.")
+                if mode.value == "percentage" and value > 100:
+                    raise ValueError("The percentage interval cannot exceed 100.")
+                if not 1 <= frame_rate <= 120:
+                    raise ValueError("Video FPS must be between 1 and 120.")
+            except (TypeError, ValueError) as exc:
+                error.value = str(exc)
+                self.page.update()
+                return
+
+            printer.camera = CameraSettings(
+                url=camera_url, timelapse_enabled=enabled.value,
+                capture_mode=mode.value, interval=value,
+                output_dir=output.value.strip(), fps=frame_rate,
+            )
+            self.config.save()
+            self.monitor_manager.sync(self.config.printers)
+            with self.update_lock:
+                self.page.pop_dialog()
+
+        dialog = ft.AlertDialog(
+            modal=True, title=ft.Text(f"Camera and timelapse — {printer.name}"),
+            content=ft.Column(
+                [url, enabled, mode, interval, fps, output,
+                 ft.Text("Progress capture is checked at the printer poll interval.",
+                         size=12, color=ft.Colors.OUTLINE), error],
+                tight=True, spacing=10, width=420, scroll=ft.ScrollMode.AUTO,
+            ),
+            actions=[
+                ft.TextButton("Preview", on_click=preview),
+                ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()),
+                ft.FilledButton("Save", on_click=save),
+            ],
+        )
+        with self.update_lock:
+            self.page.show_dialog(dialog)
+
+    def open_camera_preview(self, url: str, name: str) -> None:
+        preview = ft.Container(width=640, height=360, alignment=ft.Alignment.CENTER)
+        status = ft.Text("Connecting to camera...")
+        stop = threading.Event()
+        image: ft.Image | None = None
+
+        def close(e: ft.ControlEvent) -> None:
+            stop.set()
+            self.page.pop_dialog()
+
+        dialog = ft.AlertDialog(
+            modal=True, title=ft.Text(f"Camera — {name}"),
+            content=ft.Column([preview, status], tight=True),
+            actions=[ft.TextButton("Close", on_click=close)],
+            on_dismiss=lambda e: stop.set(),
+        )
+        with self.update_lock:
+            self.page.show_dialog(dialog)
+
+        def refresh() -> None:
+            nonlocal image
+            while not stop.is_set():
+                try:
+                    frame = capture_frame(url)
+                    with self.update_lock:
+                        if stop.is_set():
+                            return
+                        if image is None:
+                            image = ft.Image(
+                                src=frame, width=640, height=360, fit=ft.BoxFit.CONTAIN
+                            )
+                            preview.content = image
+                        else:
+                            image.src = frame
+                        status.value = "Live preview (refreshed snapshots)"
+                        self.page.update()
+                except requests.RequestException:
+                    with self.update_lock:
+                        if stop.is_set():
+                            return
+                        status.value = "Camera preview failed. Check the snapshot URL and connection."
+                        self.page.update()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    with self.update_lock:
+                        if stop.is_set():
+                            return
+                        status.value = f"Camera preview failed: {exc}"
+                        self.page.update()
+                stop.wait(2)
+
+        threading.Thread(target=refresh, daemon=True).start()
 
     # ----------------------------------------------------------- target CRUD
     def open_target_dialog(self, printer: Printer, target: Target | None = None) -> None:
@@ -580,7 +720,26 @@ class PrinterNotifyApp:
     # -------------------------------------------------------------- helpers
     def refresh_current_view(self) -> None:
         with self.update_lock:
-            self.route_change(None)
+            route = self.page.route
+            if not self.page.views or self.page.views[-1].route != route:
+                self.route_change(None)
+                return
+
+            if route == "/":
+                updated_view = self.build_dashboard_view()
+            elif route.startswith("/printer/"):
+                printer = self.config.get_printer(route.split("/printer/", 1)[1])
+                if printer is None:
+                    self.route_change(None)
+                    return
+                updated_view = self.build_targets_view(printer)
+            else:
+                self.route_change(None)
+                return
+
+            current_view = self.page.views[-1]
+            current_view.controls = updated_view.controls
+            self.page.update()
 
     def on_status_update(self, printer_id: str, info: dict) -> None:
         self.status_cache[printer_id] = info

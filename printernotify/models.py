@@ -52,6 +52,23 @@ class Target:
 
 
 @dataclass
+class CameraSettings:
+    url: str = ""
+    timelapse_enabled: bool = False
+    capture_mode: str = "time"
+    interval: float = 30.0
+    output_dir: str = ""
+    fps: int = 30
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CameraSettings":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class Printer:
     name: str
     host: str
@@ -62,6 +79,7 @@ class Printer:
     enabled: bool = True
     id: str = field(default_factory=new_id)
     targets: list[Target] = field(default_factory=list)
+    camera: CameraSettings = field(default_factory=CameraSettings)
 
     @property
     def base_url(self) -> str:
@@ -79,6 +97,7 @@ class Printer:
             "polling_interval": self.polling_interval,
             "enabled": self.enabled,
             "targets": [t.to_dict() for t in self.targets],
+            "camera": self.camera.to_dict(),
         }
 
     @classmethod
@@ -93,6 +112,7 @@ class Printer:
             polling_interval=d.get("polling_interval", 3.0),
             enabled=d.get("enabled", True),
             targets=[Target.from_dict(t) for t in d.get("targets", [])],
+            camera=CameraSettings.from_dict(d.get("camera", {})),
         )
 
 

@@ -1,6 +1,7 @@
 """Sends notifications either via the OS (native) and/or a standalone popup window."""
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -11,14 +12,19 @@ except Exception:  # pragma: no cover - plyer missing or unsupported platform
 
 # CC0 "Notification Pop" sound by Kenney, via soundcn.xyz.
 POPUP_SOUND_PATH = Path(__file__).parent / "assets" / "notification_pop.mp3"
+logger = logging.getLogger(__name__)
 
 
 def _play_popup_sound(sound_path: Path) -> None:
     try:
-        from playsound import playsound
+        from playsound3 import PlaysoundException, playsound
+    except ImportError as exc:
+        logger.warning("Could not load notification sound player: %s", exc)
+        return
+    try:
         playsound(str(sound_path))
-    except Exception:  # pragma: no cover - best-effort, missing backend/codec, etc.
-        pass
+    except (PlaysoundException, OSError, RuntimeError) as exc:
+        logger.warning("Could not play notification sound %s: %s", sound_path, exc)
 
 
 def show_popup_notification(

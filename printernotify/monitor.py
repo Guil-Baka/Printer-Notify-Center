@@ -9,6 +9,7 @@ import requests
 from .models import Printer
 from .moonraker_client import MoonrakerClient
 from .notifier import Notifier
+from .timelapse import TimelapseRecorder
 
 # Objects always polled so the dashboard has something useful to show, in
 # addition to whatever objects the user's targets reference.
@@ -53,9 +54,9 @@ def _compare(current, operator: str, target_value: str) -> bool:
         if operator == "<":
             return current < coerced
         if operator == "==":
-            return str(current) == str(coerced)
+            return current == coerced
         if operator == "!=":
-            return str(current) != str(coerced)
+            return current != coerced
     except TypeError:
         return False
     return False
@@ -83,20 +84,28 @@ class PrinterMonitor:
         self._stop_event.set()
 
     def _run(self) -> None:
-        while not self._stop_event.is_set():
-            client = MoonrakerClient(
-                self.printer.base_url, self.printer.api_key)
-            objects = sorted(set(BASE_OBJECTS) | {
-                             t.object_name for t in self.printer.targets if t.enabled and t.object_name})
-            try:
-                status = client.query_objects(objects)
-                self.status_callback(
-                    self.printer.id, {"online": True, "status": status})
-                self._evaluate_targets(status)
-            except Exception as exc:
-                self.status_callback(
-                    self.printer.id, {"online": False, "error": describe_error(exc)})
-            self._stop_event.wait(max(self.printer.polling_interval, 1.0))
+        recorder = TimelapseRecorder(self.printer, self.notifier)
+        recorder.start()
+        try:
+            while not self._stop_event.is_set():
+                recorder.printer = self.printer
+                client = MoonrakerClient(
+                    self.printer.base_url, self.printer.api_key)
+                objects = sorted(set(BASE_OBJECTS) | {
+                                 t.object_name for t in self.printer.targets if t.enabled and t.object_name})
+                try:
+                    status = client.query_objects(objects)
+                    self.status_callback(
+                        self.printer.id, {"online": True, "status": status})
+                    self._evaluate_targets(status)
+                    recorder.submit(status)
+                except Exception as exc:
+                    recorder.submit(None)
+                    self.status_callback(
+                        self.printer.id, {"online": False, "error": describe_error(exc)})
+                self._stop_event.wait(max(self.printer.polling_interval, 1.0))
+        finally:
+            recorder.stop()
 
     def _evaluate_targets(self, status: dict) -> None:
         for target in self.printer.targets:
