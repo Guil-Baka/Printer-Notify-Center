@@ -1,0 +1,45 @@
+name: Windows tests and build
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: python -m pip install --upgrade --upgrade-strategy eager -r requirements.txt
+      - name: Check dependencies
+        run: python -m pip check
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Build Windows app
+        run: flet build windows --yes
+      - name: Check package contents
+        shell: pwsh
+        run: |
+          if (-not (Get-ChildItem build\windows -Filter *.exe)) {
+            throw "Windows executable missing"
+          }
+          foreach ($path in @(".git", ".github", ".venv", "tests")) {
+            if (Test-Path "build\windows\app\$path") {
+              throw "Development directory included in package: $path"
+            }
+          }
+          if (-not (Get-ChildItem build\windows\site-packages\imageio_ffmpeg\binaries -Filter ffmpeg*.exe)) {
+            throw "FFmpeg executable missing from package"
+          }

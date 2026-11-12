@@ -1,6 +1,6 @@
-flet==1.0.0
-requests>=2.31
+flet[cli,desktop]==1.1.2
+requests>=2.34.2,<3
 plyer>=2.1.0
-platformdirs>=4.2.0
+platformdirs>=4.14.5,<5
 playsound3>=3.3.2,<4
-imageio-ffmpeg>=0.6.0,<0.7
+imageio-ffmpeg>=0.8.1,<0.9

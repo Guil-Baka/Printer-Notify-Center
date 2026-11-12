@@ -1,0 +1,19 @@
+[tool.flet.app]
+exclude = [
+    ".git",
+    ".github",
+    ".venv",
+    "venv",
+    "env",
+    "ENV",
+    ".vscode",
+    ".idea",
+    ".env",
+    ".env.*",
+    "config.json",
+    "*.local.json",
+    "tests",
+]
+
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "^1.1.1"

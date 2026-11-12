@@ -124,9 +124,29 @@ by end users).
 
    Flet only builds for the OS you run the command on (cross-compiling isn't
    supported), so build on Windows for a Windows binary, on macOS for a `.app`, etc.
+   The project's `pyproject.toml` overrides the Flutter JNI dependency to a
+   compatible 1.1 release and excludes development files from the package;
+   keep it in the project root when building. Review the output before
+   distributing it, especially if you keep other private files in the project.
 
 3. Find the packaged app in the `build/<platform>` folder and distribute/run it
    directly — it bundles its own Python runtime.
+
+## Dependency updates
+
+Dependabot proposes dependency updates weekly. The Windows workflow runs the
+tests and a standalone build on pushes, pull requests, and weekly, so changes in
+transitive Flutter or Python dependencies can be detected. Review and test
+update proposals before merging; this cannot prevent every future regression.
+Flet and its CLI and desktop components are installed at the same pinned
+version. To refresh compatible dependencies locally, run:
+
+```powershell
+python -m pip install --upgrade --upgrade-strategy eager -r requirements.txt
+python -m pip check
+python -m unittest discover -s tests -v
+flet build windows
+```
 
 ## Notes on native notifications
 
