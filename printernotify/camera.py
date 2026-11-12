@@ -14,8 +14,10 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 def validate_camera_url(url: str) -> None:
     parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https", "rtmp", "rtmps") or not parsed.hostname:
-        raise ValueError("Use an HTTP(S) snapshot URL or an RTMP(S) stream URL.")
+    if parsed.scheme in ("rtmp", "rtmps"):
+        raise ValueError("RTMP is no longer supported. Enter the camera's RTSP or HTTP(S) snapshot URL.")
+    if parsed.scheme not in ("http", "https", "rtsp", "rtsps") or not parsed.hostname:
+        raise ValueError("Use an HTTP(S) snapshot URL or an RTSP(S) stream URL.")
 
 
 def capture_frame(url: str) -> bytes:
@@ -42,7 +44,7 @@ def capture_frame(url: str) -> bytes:
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
-                "RTMP camera timed out. Check the host, port and stream path."
+                "RTSP camera timed out. Check the host, port and stream path."
             ) from exc
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or b"").decode("utf-8", errors="replace").lower()
@@ -51,10 +53,10 @@ def capture_frame(url: str) -> bytes:
                 "network is unreachable", "no route to host",
             )):
                 raise RuntimeError(
-                    "Could not connect to the RTMP camera. Check the host, port and network."
+                    "Could not connect to the RTSP camera. Check the host, port and network."
                 ) from exc
             raise RuntimeError(
-                "Could not read the RTMP stream. Check the full stream path and camera settings."
+                "Could not read the RTSP stream. Check the full stream path and camera settings."
             ) from exc
         frame = result.stdout
         if len(frame) > MAX_IMAGE_BYTES:

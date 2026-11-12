@@ -381,7 +381,7 @@ class PrinterNotifyApp:
         settings = printer.camera
         url = ft.TextField(
             label="Camera URL", value=settings.url,
-            hint_text="HTTP(S) JPEG snapshot or RTMP(S) stream",
+            hint_text="HTTP(S) JPEG snapshot or RTSP(S) stream",
         )
         enabled = ft.Switch(label="Record timelapses while printing",
                             value=settings.timelapse_enabled)

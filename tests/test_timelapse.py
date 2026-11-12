@@ -1,4 +1,6 @@
 import http.server
+import re
+import socketserver
 import subprocess
 import tempfile
 import threading
@@ -138,16 +140,18 @@ class TimelapseTests(unittest.TestCase):
         self.assertIn("retained", self.notifier.notify.call_args.args[1])
 
     @patch("printernotify.camera.subprocess.run")
-    def test_rtmp_capture_uses_ffmpeg(self, run):
+    def test_rtsp_capture_uses_ffmpeg(self, run):
         run.return_value.stdout = b"\xff\xd8frame\xff\xd9"
-        self.assertEqual(b"\xff\xd8frame\xff\xd9", capture_frame("rtmp://host/live"))
-        command = run.call_args.args[0]
-        self.assertEqual("rtmp://host/live", command[command.index("-i") + 1])
-        self.assertIn("image2pipe", command)
+        for url in ("rtsp://host/live", "rtsps://host/live"):
+            with self.subTest(url=url):
+                self.assertEqual(b"\xff\xd8frame\xff\xd9", capture_frame(url))
+                command = run.call_args.args[0]
+                self.assertEqual(url, command[command.index("-i") + 1])
+                self.assertIn("image2pipe", command)
 
     @patch("printernotify.camera.subprocess.run")
-    def test_rtmp_errors_are_actionable_and_do_not_expose_credentials(self, run):
-        url = "rtmp://user:secret@host/live?token=secret"
+    def test_rtsp_errors_are_actionable_and_do_not_expose_credentials(self, run):
+        url = "rtsp://user:secret@host/live?token=secret"
         run.side_effect = subprocess.CalledProcessError(
             1, [], stderr=f"Cannot open connection to {url}".encode()
         )
@@ -162,13 +166,101 @@ class TimelapseTests(unittest.TestCase):
             capture_frame(url)
         self.assertIn("stream path", str(caught.exception))
         self.assertNotIn("secret", str(caught.exception))
+        run.side_effect = subprocess.TimeoutExpired([], 15)
+        with self.assertRaisesRegex(RuntimeError, "RTSP camera timed out"):
+            capture_frame(url)
 
     def test_url_validation(self):
-        for value in ("http://host/snapshot", "https://host/camera", "rtmp://host/live"):
+        for value in ("http://host/snapshot", "https://host/camera", "rtsp://host/live", "rtsps://host/live"):
             validate_camera_url(value)
-        for value in ("", "file:///test", "http://", "ftp://host/file"):
+        for value in ("", "file:///test", "http://", "rtsp://", "ftp://host/file", "rtmp://host/live", "rtmps://host/live"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_camera_url(value)
+        with self.assertRaisesRegex(ValueError, "RTMP is no longer supported"):
+            validate_camera_url("rtmp://host/live")
+
+    def test_existing_rtmp_settings_are_reported(self):
+        self.settings.url = "rtmp://host/live"
+        self.recorder._update(status())
+        self.assertFalse(self.recorder._active)
+        self.assertIn("RTMP is no longer supported", self.notifier.notify.call_args.args[1])
+
+    def test_actual_rtsp_frame_capture(self):
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        handler_done = threading.Event()
+
+        class RTSPHandler(socketserver.StreamRequestHandler):
+            def handle(self):
+                sender = None
+                try:
+                    while True:
+                        request = self.rfile.readline().decode("ascii").strip()
+                        if not request:
+                            return
+                        method = request.split()[0]
+                        headers = {}
+                        while True:
+                            line = self.rfile.readline().decode("ascii").strip()
+                            if not line:
+                                break
+                            key, value = line.split(":", 1)
+                            headers[key.lower()] = value.strip()
+                        extra = ""
+                        body = ""
+                        if method == "DESCRIBE":
+                            body = (
+                                "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Test\r\n"
+                                "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+                                "m=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"
+                                "a=control:track1\r\n"
+                            )
+                            extra = "Content-Type: application/sdp\r\n"
+                        elif method == "SETUP":
+                            transport = headers["transport"]
+                            match = re.search(r"client_port=(\d+)-(\d+)", transport)
+                            if not match:
+                                return
+                            port = int(match.group(1))
+                            extra = f"Transport: {transport};server_port=30000-30001\r\nSession: 1\r\n"
+                        elif method == "PLAY":
+                            extra = "Session: 1\r\n"
+                        response = (
+                            f"RTSP/1.0 200 OK\r\nCSeq: {headers['cseq']}\r\n"
+                            f"{extra}Content-Length: {len(body)}\r\n\r\n{body}"
+                        )
+                        self.wfile.write(response.encode("ascii"))
+                        self.wfile.flush()
+                        if method == "PLAY":
+                            sender = subprocess.Popen(
+                                [ffmpeg, "-hide_banner", "-loglevel", "error", "-re",
+                                 "-f", "lavfi", "-i", "color=red:s=64x64:r=5",
+                                 "-c:v", "libx264", "-preset", "ultrafast", "-tune",
+                                 "zerolatency", "-f", "rtp", f"rtp://127.0.0.1:{port}"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            )
+                except ConnectionResetError:
+                    pass
+                finally:
+                    if sender is not None:
+                        sender.terminate()
+                        sender.wait(timeout=5)
+                    handler_done.set()
+
+        class RTSPServer(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        with RTSPServer(("127.0.0.1", 0), RTSPHandler) as server:
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                frame = capture_frame(f"rtsp://127.0.0.1:{server.server_address[1]}/live")
+                self.assertTrue(frame.startswith(b"\xff\xd8"))
+                self.assertTrue(frame.endswith(b"\xff\xd9"))
+            finally:
+                server.shutdown()
+                worker.join(timeout=3)
+                self.assertTrue(handler_done.wait(5))
 
     def test_actual_http_snapshot_and_mp4_encoding(self):
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()

@@ -173,6 +173,11 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("URL", error.value)
         self.assertEqual(0, self.config.saved)
         self.session.apply_patch(url._i, {"value": "rtmp://camera/live"})
+        await self.session.dispatch_event(dialog.actions[2]._i, "click", None)
+        self.assertTrue(dialog.open)
+        self.assertIn("RTMP is no longer supported", error.value)
+        self.assertEqual(0, self.config.saved)
+        self.session.apply_patch(url._i, {"value": "rtsp://camera/live"})
         self.session.apply_patch(mode._i, {"value": "percentage"})
         self.session.apply_patch(interval._i, {"value": "0.5"})
         self.session.apply_patch(fps._i, {"value": "24"})
@@ -181,7 +186,7 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(dialog.open)
         self.assertEqual(1, self.config.saved)
         self.assertEqual(
-            ("rtmp://camera/live", True, "percentage", 0.5, 24, "example-folder"),
+            ("rtsp://camera/live", True, "percentage", 0.5, 24, "example-folder"),
             (self.printer.camera.url, self.printer.camera.timelapse_enabled,
              self.printer.camera.capture_mode, self.printer.camera.interval,
              self.printer.camera.fps, self.printer.camera.output_dir),
@@ -198,7 +203,7 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
             return frame
 
         with patch("printernotify.ui.capture_frame", side_effect=capture):
-            self.app.open_camera_preview("rtmp://host/live", "Printer")
+            self.app.open_camera_preview("rtsp://host/live", "Printer")
             dialog = self.page._dialogs.controls[-1]
             preview, status = dialog.content.controls
             try:
@@ -219,9 +224,9 @@ class TargetDialogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_camera_preview_reports_failure_without_empty_image(self):
         with patch("printernotify.ui.capture_frame", side_effect=RuntimeError(
-            "Could not connect to the RTMP camera."
+            "Could not connect to the RTSP camera."
         )):
-            self.app.open_camera_preview("rtmp://host/live", "Printer")
+            self.app.open_camera_preview("rtsp://host/live", "Printer")
             dialog = self.page._dialogs.controls[-1]
             preview, status = dialog.content.controls
             try:

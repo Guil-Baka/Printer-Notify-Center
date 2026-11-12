@@ -21,7 +21,7 @@ I normally print projects which are many different pieces that will be connected
 - A settings toggle to force in-app popups on, or disable native notifications entirely,
   for users who prefer not to use OS notifications.
 - Config persisted as JSON in the OS-appropriate user config directory.
-- One manually configured RTMP camera or Mainsail-compatible JPEG snapshot URL per
+- One manually configured RTSP camera or Mainsail-compatible JPEG snapshot URL per
   printer, with a periodically refreshed preview.
 - Timelapses captured by elapsed time or print progress, with photos and an MP4
   saved locally when a print completes, is cancelled, or errors.
@@ -35,15 +35,18 @@ python main.py
 
 ## Cameras and timelapses
 
-On a printer card, select the camera icon. Enter an `rtmp://` or `rtmps://`
+On a printer card, select the camera icon. Enter an `rtsp://` or `rtsps://`
 stream URL, or the full `http://` or `https://` JPEG **snapshot** URL from
 Mainsail's webcam settings. A Mainsail stream URL is not a snapshot URL; use
 the snapshot address, not the MJPEG stream address. Camera URLs are entered
 manually, not discovered automatically. The Preview button displays refreshed
 frames approximately every two seconds, rather than a full-frame-rate stream.
-If an RTMP preview cannot connect, check that the camera's RTMP service is
+If an RTSP preview cannot connect, check that the camera's RTSP service is
 running and reachable from this computer, and use the full stream URL,
 including any required application and stream path.
+Existing RTMP URLs are no longer supported: replace each with the camera's
+actual RTSP or HTTP(S) snapshot URL. Changing only the URL scheme does not
+convert an RTMP stream into an RTSP stream.
 
 Enable timelapses and choose either seconds or percentage, an interval, the
 video playback FPS (default 30), and optionally an output folder. Percentage
